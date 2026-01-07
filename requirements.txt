@@ -1,0 +1,8 @@
+streamlit
+openai-whisper
+ffmpeg-python
+yt-dlp
+deep-translator
+arabic-reshaper
+python-bidi
+numpy
