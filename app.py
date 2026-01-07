@@ -9,12 +9,12 @@ import arabic_reshaper
 from bidi.algorithm import get_display
 
 st.set_page_config(page_title="المترجم العربي", layout="centered")
-st.title("🎬 استوديو الترجمة (يدعم العربية)")
+st.title("🎬 استوديو الترجمة (Online)")
 
 # --- القائمة الجانبية ---
 with st.sidebar:
     st.header("⚙️ الإعدادات")
-    # ملاحظة: اخترنا base للتخفيف على السيرفر المجاني
+    # نستخدم base لأنه أخف وأسرع للسيرفر المجاني
     model_type = st.selectbox("دقة الذكاء الاصطناعي:", ["base", "small"])
     
     lang_options = {
@@ -29,16 +29,34 @@ with st.sidebar:
 # --- دوال المعالجة ---
 
 def download_video(url):
-    ydl_opts = {'format': 'mp4/best', 'outtmpl': 'input_video.mp4', 'quiet': True, 'geo_bypass': True, 'nocheckcertificate': True}
+    # إعدادات محسنة لتجاوز حظر يوتيوب للسيرفرات
+    ydl_opts = {
+        'format': 'mp4/best',
+        'outtmpl': 'input_video.mp4',
+        'quiet': True,
+        'geo_bypass': True,
+        'nocheckcertificate': True,
+        # هذا الجزء مهم جداً لخداع يوتيوب
+        'http_headers': {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+            'Referer': 'https://www.google.com/'
+        }
+    }
+    
     if os.path.exists("input_video.mp4"): os.remove("input_video.mp4")
+    
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         ydl.download([url])
     return "input_video.mp4"
 
 def process_text_for_burning(text):
-    reshaped_text = arabic_reshaper.reshape(text)
-    bidi_text = get_display(reshaped_text)
-    return bidi_text
+    # دالة إصلاح الحروف العربية المقطعة
+    try:
+        reshaped_text = arabic_reshaper.reshape(text)
+        bidi_text = get_display(reshaped_text)
+        return bidi_text
+    except:
+        return text
 
 def create_srt_files(segments, target_lang):
     clean_srt = ""
@@ -58,6 +76,7 @@ def create_srt_files(segments, target_lang):
             
         clean_srt += f"{i}\n{start} --> {end}\n{translated_text}\n\n"
         
+        # معالجة خاصة للعربية عند الدمج
         if target_lang == "ar":
             ready_text = process_text_for_burning(translated_text)
         else:
@@ -75,57 +94,74 @@ def burn_subtitles(video_file, srt_file_path):
     if os.path.exists(output_file): os.remove(output_file)
     
     try:
-        # استخدام خط افتراضي في النظام
-        style = "Fontsize=24,Alignment=2,MarginV=25"
+        # استخدام إعدادات خطوط عامة لضمان العمل على السيرفر
+        style = "Fontsize=24,Alignment=2,MarginV=25,BorderStyle=1,Outline=1,Shadow=0"
         stream = ffmpeg.input(video_file)
         stream = ffmpeg.output(stream, output_file, vf=f"subtitles={srt_file_path}:force_style='{style}'")
         ffmpeg.run(stream, overwrite_output=True, quiet=True)
         return output_file
     except Exception as e:
+        st.warning(f"لم نتمكن من دمج الفيديو بسبب قيود السيرفر: {e}")
         return None
 
 # --- الواجهة ---
-tab1, tab2 = st.tabs(["🔗 رابط", "📂 ملف"])
+tab1, tab2 = st.tabs(["🔗 رابط يوتيوب", "📂 رفع ملف مباشر"])
 video_source = None
 
+# التبويب الأول: الرابط
 with tab1:
-    url = st.text_input("الرابط:")
-    if st.button("🚀 ابدأ") and url:
-        with st.spinner("تحميل..."):
+    url = st.text_input("ضع رابط الفيديو هنا:")
+    if st.button("🚀 ابدأ من الرابط") and url:
+        with st.spinner("جاري محاولة سحب الفيديو..."):
             try:
                 video_source = download_video(url)
-            except:
-                st.error("خطأ في التحميل")
+            except Exception as e:
+                # هنا سنظهر الخطأ الحقيقي لنعرف السبب
+                st.error(f"تعذر تحميل الفيديو من الرابط (يوتيوب يحظر السيرفرات أحياناً).")
+                st.code(f"Error details: {e}")
+                st.info("💡 الحل السريع: حمل الفيديو على هاتفك ثم استخدم التبويب الثاني 'رفع ملف مباشر'.")
 
+# التبويب الثاني: رفع الملف
 with tab2:
-    uploaded = st.file_uploader("ملف", type=["mp4"])
-    if st.button("🚀 معالجة") and uploaded:
-        with open("input_video.mp4", "wb") as f: f.write(uploaded.getbuffer())
+    uploaded = st.file_uploader("اختر الفيديو من جهازك", type=["mp4", "mov", "avi"])
+    if st.button("🚀 ابدأ المعالجة") and uploaded:
+        with open("input_video.mp4", "wb") as f:
+            f.write(uploaded.getbuffer())
         video_source = "input_video.mp4"
 
+# --- بدء المعالجة ---
 if video_source and os.path.exists(video_source):
-    st.info(f"جاري العمل... اللغة: {selected_lang_name}")
-    
-    with st.spinner("جاري استخراج الكلام... (قد يستغرق وقتاً)"):
-        # فرضنا base هنا لتسريع العمل
-        model = whisper.load_model("base") 
-        result = model.transcribe(video_source)
-    
-    clean_text, burn_text = create_srt_files(result["segments"], target_lang_code)
-    
-    with open("clean_subs.srt", "w", encoding="utf-8") as f: f.write(clean_text)
-    with open("burn_subs.srt", "w", encoding="utf-8") as f: f.write(burn_text)
-    
-    st.success("✅ تمت الترجمة!")
-    
-    with st.spinner("🎞️ جاري الدمج..."):
-        final_video = burn_subtitles(video_source, "burn_subs.srt")
-    
     st.divider()
-    if final_video:
-        st.subheader("النتيجة:")
-        st.video(final_video)
-        with open(final_video, "rb") as v:
-            st.download_button("⬇️ تحميل الفيديو", v, "video_translated.mp4")
+    st.info(f"✅ تم استلام الفيديو! جاري العمل... (اللغة: {selected_lang_name})")
+    
+    with st.spinner("🤖 الذكاء الاصطناعي يكتب النص... (قد يستغرق دقيقة)"):
+        try:
+            model = whisper.load_model(model_type)
+            result = model.transcribe(video_source)
             
-    st.download_button("📄 تحميل ملف الترجمة", clean_text, "subs.srt")
+            clean_text, burn_text = create_srt_files(result["segments"], target_lang_code)
+            
+            with open("clean_subs.srt", "w", encoding="utf-8") as f: f.write(clean_text)
+            with open("burn_subs.srt", "w", encoding="utf-8") as f: f.write(burn_text)
+            
+            st.success("تم استخراج النص وترجمته!")
+            
+            # محاولة الدمج
+            final_video = None
+            with st.spinner("🎞️ جاري دمج الترجمة مع الفيديو..."):
+                final_video = burn_subtitles(video_source, "burn_subs.srt")
+            
+            st.divider()
+            if final_video and os.path.exists(final_video):
+                st.subheader("📺 الفيديو النهائي:")
+                st.video(final_video)
+                with open(final_video, "rb") as v:
+                    st.download_button("⬇️ تحميل الفيديو المترجم (MP4)", v, "video_translated.mp4")
+            else:
+                st.warning("تم تجهيز ملف الترجمة، لكن دمج الفيديو فشل (قد يحتاج السيرفر لمكتبات إضافية). يمكنك تحميل ملف الترجمة والفيديو الأصلي.")
+                
+            st.download_button("📄 تحميل ملف الترجمة (SRT)", clean_text, "subtitles.srt")
+            
+        except Exception as e:
+            st.error(f"حدث خطأ أثناء المعالجة: {e}")
+
